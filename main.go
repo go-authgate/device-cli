@@ -11,7 +11,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	retry "github.com/appleboy/go-httpretry"
@@ -223,7 +225,9 @@ func main() {
 
 	fmt.Printf("=== OAuth Device Code Flow CLI Demo (with Refresh Token) ===\n\n")
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	var storage *TokenStorage
 
 	// Try to load existing tokens
@@ -238,7 +242,7 @@ func main() {
 			fmt.Println("Access token expired, refreshing...")
 
 			// Try to refresh
-			newStorage, err := refreshAccessToken(storage.RefreshToken)
+			newStorage, err := refreshAccessToken(ctx, storage.RefreshToken)
 			if err != nil {
 				fmt.Printf("Refresh failed: %v\n", err)
 				fmt.Println("Starting new device flow...")
@@ -275,7 +279,7 @@ func main() {
 
 	// Verify token
 	fmt.Println("\nVerifying token...")
-	if err := verifyToken(storage.AccessToken); err != nil {
+	if err := verifyToken(ctx, storage.AccessToken); err != nil {
 		fmt.Printf("Token verification failed: %v\n", err)
 	} else {
 		fmt.Println("Token verified successfully!")
@@ -283,7 +287,7 @@ func main() {
 
 	// Demonstrate automatic refresh on 401
 	fmt.Println("\nDemonstrating automatic refresh on API call...")
-	if err := makeAPICallWithAutoRefresh(storage); err != nil {
+	if err := makeAPICallWithAutoRefresh(ctx, storage); err != nil {
 		// Check if error is due to expired refresh token
 		if err == ErrRefreshTokenExpired {
 			fmt.Println("Refresh token expired, re-authenticating...")
@@ -295,7 +299,7 @@ func main() {
 
 			// Retry API call with new tokens
 			fmt.Println("Retrying API call with new tokens...")
-			if err := makeAPICallWithAutoRefresh(storage); err != nil {
+			if err := makeAPICallWithAutoRefresh(ctx, storage); err != nil {
 				fmt.Printf("API call failed after re-authentication: %v\n", err)
 				os.Exit(1)
 			}
@@ -606,19 +610,19 @@ func exchangeDeviceCode(
 	return token, nil
 }
 
-func verifyToken(accessToken string) error {
+func verifyToken(ctx context.Context, accessToken string) error {
 	// Create request with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), tokenVerificationTimeout)
+	reqCtx, cancel := context.WithTimeout(ctx, tokenVerificationTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", serverURL+"/oauth/tokeninfo", nil)
+	req, err := http.NewRequestWithContext(reqCtx, "GET", serverURL+"/oauth/tokeninfo", nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 
 	// Execute request with retry logic
-	resp, err := retryClient.DoWithContext(ctx, req)
+	resp, err := retryClient.DoWithContext(reqCtx, req)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
@@ -727,9 +731,9 @@ func saveTokens(storage *TokenStorage) error {
 }
 
 // refreshAccessToken refreshes the access token using refresh token
-func refreshAccessToken(refreshToken string) (*TokenStorage, error) {
+func refreshAccessToken(ctx context.Context, refreshToken string) (*TokenStorage, error) {
 	// Create request with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), refreshTokenTimeout)
+	reqCtx, cancel := context.WithTimeout(ctx, refreshTokenTimeout)
 	defer cancel()
 
 	data := url.Values{}
@@ -738,7 +742,7 @@ func refreshAccessToken(refreshToken string) (*TokenStorage, error) {
 	data.Set("client_id", clientID)
 
 	req, err := http.NewRequestWithContext(
-		ctx,
+		reqCtx,
 		"POST",
 		serverURL+"/oauth/token",
 		strings.NewReader(data.Encode()),
@@ -749,7 +753,7 @@ func refreshAccessToken(refreshToken string) (*TokenStorage, error) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	// Execute request with retry logic
-	resp, err := retryClient.DoWithContext(ctx, req)
+	resp, err := retryClient.DoWithContext(reqCtx, req)
 	if err != nil {
 		return nil, fmt.Errorf("refresh request failed: %w", err)
 	}
@@ -819,15 +823,18 @@ func refreshAccessToken(refreshToken string) (*TokenStorage, error) {
 }
 
 // makeAPICallWithAutoRefresh demonstrates automatic refresh on 401
-func makeAPICallWithAutoRefresh(storage *TokenStorage) error {
+func makeAPICallWithAutoRefresh(ctx context.Context, storage *TokenStorage) error {
 	// Try with current access token
-	req, err := http.NewRequest("GET", serverURL+"/oauth/tokeninfo", nil)
+	reqCtx, cancel := context.WithTimeout(ctx, tokenVerificationTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, "GET", serverURL+"/oauth/tokeninfo", nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+storage.AccessToken)
 
-	resp, err := retryClient.DoWithContext(context.Background(), req)
+	resp, err := retryClient.DoWithContext(reqCtx, req)
 	if err != nil {
 		return fmt.Errorf("API request failed: %w", err)
 	}
@@ -837,7 +844,7 @@ func makeAPICallWithAutoRefresh(storage *TokenStorage) error {
 	if resp.StatusCode == http.StatusUnauthorized {
 		fmt.Println("Access token rejected (401), refreshing...")
 
-		newStorage, err := refreshAccessToken(storage.RefreshToken)
+		newStorage, err := refreshAccessToken(ctx, storage.RefreshToken)
 		if err != nil {
 			// If refresh token is expired, propagate the error to trigger device flow
 			if err == ErrRefreshTokenExpired {
@@ -855,13 +862,16 @@ func makeAPICallWithAutoRefresh(storage *TokenStorage) error {
 		fmt.Println("Token refreshed, retrying API call...")
 
 		// Retry with new token
-		req, err = http.NewRequest("GET", serverURL+"/oauth/tokeninfo", nil)
+		retryCtx, retryCancel := context.WithTimeout(ctx, tokenVerificationTimeout)
+		defer retryCancel()
+
+		req, err = http.NewRequestWithContext(retryCtx, "GET", serverURL+"/oauth/tokeninfo", nil)
 		if err != nil {
 			return fmt.Errorf("failed to create retry request: %w", err)
 		}
 		req.Header.Set("Authorization", "Bearer "+storage.AccessToken)
 
-		resp, err = retryClient.DoWithContext(context.Background(), req)
+		resp, err = retryClient.DoWithContext(retryCtx, req)
 		if err != nil {
 			return fmt.Errorf("retry failed: %w", err)
 		}

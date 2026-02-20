@@ -396,7 +396,7 @@ func TestRefreshAccessToken_RotationMode(t *testing.T) {
 			serverURL = server.URL
 
 			// Call refreshAccessToken
-			storage, err := refreshAccessToken(tt.oldRefreshToken)
+			storage, err := refreshAccessToken(context.Background(), tt.oldRefreshToken)
 			if err != nil {
 				t.Fatalf("refreshAccessToken() error = %v", err)
 			}
@@ -527,7 +527,7 @@ func TestRefreshAccessToken_ValidationErrors(t *testing.T) {
 			serverURL = server.URL
 
 			// Call refreshAccessToken
-			_, err := refreshAccessToken("test-refresh-token")
+			_, err := refreshAccessToken(context.Background(), "test-refresh-token")
 
 			if tt.wantErr {
 				if err == nil {
