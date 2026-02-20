@@ -1,5 +1,5 @@
 GO ?= go
-EXECUTABLE := cli
+EXECUTABLE := device-cli
 GOFILES := $(shell find . -type f -name "*.go")
 TAGS ?=
 TEMPL_VERSION ?= latest
