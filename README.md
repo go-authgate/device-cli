@@ -3,75 +3,77 @@
 [![Trivy Security Scan](https://github.com/go-authgate/device-cli/actions/workflows/security.yml/badge.svg)](https://github.com/go-authgate/device-cli/actions/workflows/security.yml)
 [![Lint and Testing](https://github.com/go-authgate/device-cli/actions/workflows/testing.yml/badge.svg)](https://github.com/go-authgate/device-cli/actions/workflows/testing.yml)
 
-AuthGate CLI is a command-line tool that demonstrates how to authenticate with AuthGate server using the OAuth 2.0 Device Authorization Flow.
+A CLI tool for authenticating with AuthGate server via OAuth 2.0 Device Authorization Flow ([RFC 8628](https://datatracker.ietf.org/doc/html/rfc8628)). Designed for headless environments, SSH sessions, and scenarios where browser-redirect flows are impractical.
 
-## What does it do?
+**Key capabilities:** token storage with multi-client support · automatic token refresh · RFC 8628-compliant polling with exponential backoff · TLS 1.2+ enforcement
 
-This tool allows you to:
+---
 
-- Authenticate CLI applications without requiring a web browser redirect
-- Securely store and reuse access tokens
-- Automatically refresh expired tokens
-- Verify token validity
+## Table of Contents
 
-Perfect for headless environments, SSH sessions, or any scenario where traditional OAuth flows are impractical.
+- [AuthGate CLI - OAuth 2.0 Device Flow Client](#authgate-cli---oauth-20-device-flow-client)
+  - [Table of Contents](#table-of-contents)
+  - [Prerequisites](#prerequisites)
+  - [Quick Start](#quick-start)
+  - [Configuration](#configuration)
+  - [Device Flow Architecture](#device-flow-architecture)
+  - [How to Use](#how-to-use)
+    - [First Time Login](#first-time-login)
+    - [Subsequent Runs](#subsequent-runs)
+  - [Token Storage](#token-storage)
+  - [Usage Examples](#usage-examples)
+  - [Error Reference](#error-reference)
+  - [Advanced Features](#advanced-features)
+    - [Polling with Exponential Backoff](#polling-with-exponential-backoff)
+    - [Context and Cancellation](#context-and-cancellation)
+  - [Security](#security)
+    - [HTTP Client](#http-client)
+    - [Input Validation](#input-validation)
+    - [Token File](#token-file)
+    - [Error Handling](#error-handling)
+    - [Best Practices](#best-practices)
+  - [Troubleshooting](#troubleshooting)
+  - [Development](#development)
+  - [Learn More](#learn-more)
+
+---
+
+## Prerequisites
+
+- **Go 1.21+** — required to build from source
+- **AuthGate server** — must be running and accessible ([AuthGate Documentation](../../README.md))
+- **Default server address**: `http://localhost:8080`
+
+---
 
 ## Quick Start
 
-### 1. Install
-
 ```bash
-# Clone the repository
+# 1. Clone and build
 git clone <repository-url>
-cd authgate/_example/authgate-device-cli
-
-# Build the tool
+cd device-cli
 go build -o authgate-device-cli
-```
 
-### 2. Get Your Client ID
+# 2. Get your Client ID from the AuthGate server startup logs:
+#    Client ID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 
-Start the AuthGate server and look for the client ID in the startup logs:
-
-```txt
-Client ID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-```
-
-### 3. Run the Tool
-
-```bash
-# Using command-line flag (recommended)
+# 3. Run
 ./authgate-device-cli -client-id=<your-client-id>
-
-# Or using environment variable
-export CLIENT_ID=<your-client-id>
-./authgate-device-cli
 ```
+
+---
 
 ## Configuration
 
-You can configure the tool in three ways (in order of priority):
+Priority order: **Flag > Environment Variable > `.env` file > default**
 
-### Option 1: Command-Line Flags (Highest Priority)
+| Parameter  | Flag          | Environment Variable | Default                 |
+| ---------- | ------------- | -------------------- | ----------------------- |
+| Client ID  | `-client-id`  | `CLIENT_ID`          | _(required)_            |
+| Server URL | `-server-url` | `SERVER_URL`         | `http://localhost:8080` |
+| Token File | `-token-file` | `TOKEN_FILE`         | `.authgate-tokens.json` |
 
-```bash
-./authgate-device-cli -client-id=abc-123 \
-   -server-url=http://localhost:8080 \
-   -token-file=./my-tokens.json
-```
-
-### Option 2: Environment Variables
-
-```bash
-export CLIENT_ID=abc-123
-export SERVER_URL=http://localhost:8080
-export TOKEN_FILE=.authgate-tokens.json
-./authgate-device-cli
-```
-
-### Option 3: .env File
-
-Create a `.env` file:
+**Example `.env` file:**
 
 ```env
 CLIENT_ID=abc-123
@@ -79,18 +81,56 @@ SERVER_URL=http://localhost:8080
 TOKEN_FILE=.authgate-tokens.json
 ```
 
-Then run:
-
 ```bash
-./authgate-device-cli
+./authgate-device-cli -h   # view all options
 ```
+
+---
+
+## Device Flow Architecture
+
+```mermaid
+sequenceDiagram
+    participant CLI as AuthGate CLI
+    participant Server as AuthGate Server
+    participant Browser as User's Browser
+
+    CLI->>Server: POST /oauth/device/code (client_id)
+    Server-->>CLI: device_code, user_code, verification_uri
+
+    CLI->>CLI: Display verification_uri + user_code
+
+    Browser->>Server: User visits verification_uri
+    Browser->>Server: User enters user_code + logs in
+    Server-->>Browser: Authorization granted
+
+    loop Polling every 5s (with backoff on slow_down)
+        CLI->>Server: POST /oauth/token (device_code)
+        Server-->>CLI: authorization_pending / slow_down / tokens
+    end
+
+    Server-->>CLI: access_token + refresh_token
+    CLI->>CLI: Save tokens to .authgate-tokens.json (0600)
+
+    note over CLI,Server: On subsequent runs
+    CLI->>Server: Verify access_token
+    alt Token valid
+        Server-->>CLI: 200 OK
+    else Token expired
+        CLI->>Server: POST /oauth/token (grant_type=refresh_token)
+        Server-->>CLI: New access_token + refresh_token
+        CLI->>CLI: Update token file atomically
+    end
+```
+
+---
 
 ## How to Use
 
 ### First Time Login
 
 1. Run the tool with your client ID
-2. You'll see a URL and a user code:
+2. The CLI displays a verification URL and user code:
 
    ```txt
    Please open this link to authorize:
@@ -101,23 +141,23 @@ Then run:
    ```
 
 3. Open the URL in your browser
-4. Login to AuthGate (default: admin / check server logs for password)
+4. Log in to AuthGate (default: `admin` / check server logs for password)
 5. Enter the user code when prompted
-6. The CLI will automatically detect authorization and save your tokens
+6. The CLI detects authorization automatically and saves your tokens
 
-### Subsequent Uses
+### Subsequent Runs
 
-After the first login, your tokens are saved locally. The tool will:
+Tokens are saved locally after first login. The CLI will:
 
 - Reuse valid access tokens
-- Automatically refresh expired access tokens
-- Request new authorization only if refresh fails
+- Automatically refresh expired access tokens using the refresh token
+- Start a new device flow only if refresh fails
 
-### Token Storage
+---
 
-Tokens are saved in `.authgate-tokens.json` by default (or the path you specify). This file now supports **multiple Client IDs**, allowing you to manage tokens for different OAuth clients in a single file.
+## Token Storage
 
-File structure:
+Tokens are stored in `.authgate-tokens.json` (configurable). A single file supports **multiple Client IDs**.
 
 ```json
 {
@@ -140,212 +180,166 @@ File structure:
 }
 ```
 
-Each client ID has its own token entry containing:
+**Security properties:**
 
-- Access token
-- Refresh token
-- Token type
-- Token expiration time
-- Client ID
+- Created with `0600` permissions (owner read/write only)
+- Written atomically (temp file + rename) to prevent corruption
+- File locking prevents race conditions with concurrent processes
 
-**Security Note**: This file is created with `0600` permissions (owner read/write only).
+> **Never commit this file to version control.** Add `.authgate-tokens.json` to `.gitignore`.
+
+---
 
 ## Usage Examples
 
-### Basic Usage
-
 ```bash
-# First run - will prompt for authorization
+# First run — prompts for browser authorization
 ./authgate-device-cli -client-id=abc-123
 
-# Second run - will reuse saved tokens
+# Subsequent runs — reuses saved tokens automatically
 ./authgate-device-cli -client-id=abc-123
-```
 
-### Custom Server URL
-
-```bash
-# Connect to a different server
+# Custom server URL
 ./authgate-device-cli -client-id=abc-123 -server-url=https://auth.example.com
-```
 
-### Multiple Client IDs
-
-#### Same Token File (Recommended)
-
-The default behavior now supports multiple clients in one file:
-
-```bash
-# Both clients save to the same .authgate-tokens.json file
+# Multiple clients — stored in same file by default
 ./authgate-device-cli -client-id=abc-123
 ./authgate-device-cli -client-id=xyz-789
 
-# Tokens for both clients are stored together and managed independently
-```
-
-#### Separate Token Files
-
-You can still use different token files if preferred:
-
-```bash
-# Use different token files for different environments
+# Multiple clients — separate token files
 ./authgate-device-cli -client-id=abc-123 -token-file=./work-tokens.json
 ./authgate-device-cli -client-id=xyz-789 -token-file=./personal-tokens.json
 ```
 
-### Help
+---
 
-```bash
-# View all available options
-./authgate-device-cli -h
-```
+## Error Reference
 
-## What Happens Behind the Scenes
+The CLI handles all OAuth 2.0 Device Authorization Grant error codes defined in RFC 8628:
 
-1. **Device Code Request**: CLI requests a device code from the server
-2. **User Authorization**: You authorize the device via web browser
-3. **Token Exchange**: CLI polls the server and receives tokens once authorized
-4. **Token Storage**: Tokens are saved locally for future use
-5. **Automatic Refresh**: Expired tokens are refreshed automatically
-6. **Token Verification**: Each run verifies the token is still valid
+| Error                   | Meaning                                   | CLI Behaviour                                           |
+| ----------------------- | ----------------------------------------- | ------------------------------------------------------- |
+| `authorization_pending` | User has not authorized yet               | Continues polling, shows progress dots                  |
+| `slow_down`             | Server requests slower polling            | Triggers exponential backoff (×1.5 multiplier, max 60s) |
+| `expired_token`         | Device code expired (default: 30 minutes) | Stops polling, prompts to restart authentication        |
+| `access_denied`         | User explicitly denied authorization      | Stops and displays denial message                       |
+| Other errors            | Unexpected server errors                  | Stops and displays detailed error information           |
+
+---
 
 ## Advanced Features
 
-### Intelligent Polling with Exponential Backoff
+### Polling with Exponential Backoff
 
-The CLI implements RFC 8628-compliant polling with smart error handling:
-
-#### Polling Behavior
-
-- **Initial Interval**: Defaults to 5 seconds (configurable by server)
-- **UI Updates**: Progress dots appear every 2 seconds (reduces visual clutter)
-- **Automatic Formatting**: Adds a newline every 50 dots for readability
-
-#### Error Handling
-
-The CLI handles all OAuth 2.0 Device Authorization Grant error codes:
-
-| Error Type              | Description                               | CLI Behavior                                                |
-| ----------------------- | ----------------------------------------- | ----------------------------------------------------------- |
-| `authorization_pending` | User hasn't authorized yet                | Continues polling, shows progress dots                      |
-| `slow_down`             | Server requests slower polling            | **Triggers exponential backoff** (1.5x multiplier, max 60s) |
-| `expired_token`         | Device code expired (default: 30 minutes) | Stops and prompts to restart authentication                 |
-| `access_denied`         | User explicitly denied authorization      | Stops and displays denial message                           |
-| Other errors            | Unexpected server errors                  | Stops and displays detailed error information               |
-
-#### Exponential Backoff Example
-
-When the server returns `slow_down`, the CLI automatically adjusts its polling interval:
+- **Initial interval**: 5 seconds (set by server)
+- **Progress indicator**: dots printed every 2 seconds; newline every 50 dots
+- **`slow_down` backoff**: interval multiplied by 1.5 on each signal, capped at 60s
 
 ```txt
-Initial:  5 seconds
-1st slow_down:  5 × 1.5 = 7.5 seconds
-2nd slow_down:  7.5 × 1.5 = 11.25 seconds
-3rd slow_down:  11.25 × 1.5 = 16.875 seconds
+Initial:        5.000s
+1st slow_down:  7.500s
+2nd slow_down: 11.250s
+3rd slow_down: 16.875s
 ...
-Maximum:  60 seconds (capped)
+Maximum:       60.000s
 ```
 
-This prevents overwhelming the server while maintaining responsiveness.
+### Context and Cancellation
 
-#### Context Support
+- All operations respect Go context cancellation
+- Graceful shutdown on `Ctrl+C`
+- Request timeout: 30 seconds per HTTP call
 
-The polling mechanism respects context cancellation:
+---
 
-- Supports timeout configuration
-- Graceful shutdown on interrupt (Ctrl+C)
-- Proper cleanup of resources
+## Security
 
-### Security Features
+### HTTP Client
 
-The CLI includes several security enhancements:
+| Protection          | Detail                                              |
+| ------------------- | --------------------------------------------------- |
+| Request timeout     | 30 seconds (prevents indefinite hangs)              |
+| Minimum TLS version | TLS 1.2                                             |
+| HTTP warning        | Warns automatically when server URL uses plain HTTP |
+| Connection pooling  | Idle connection limits to manage resources          |
 
-#### HTTP Client Security
+### Input Validation
 
-- **Timeout Protection**: All requests timeout after 30 seconds (prevents hanging)
-- **TLS 1.2+**: Minimum TLS version enforced
-- **HTTPS Warning**: Automatically warns when using HTTP (insecure)
-- **Connection Pooling**: Efficient resource usage with idle connection management
+- **`SERVER_URL`**: Validates URL format and scheme (`http`/`https` only)
+- **`CLIENT_ID`**: Warns if value is not a valid UUID format
 
-#### Input Validation
+### Token File
 
-- **SERVER_URL Validation**: Checks URL format and scheme (http/https only)
-- **CLIENT_ID Validation**: Warns if CLIENT_ID is not a valid UUID
-- **Error Messages**: Clear, actionable error messages without exposing sensitive data
+- Permissions: `0600` (owner-only)
+- Atomic writes: temp file + rename pattern
+- File locking: prevents data corruption with concurrent access
 
-#### Token File Security
+### Error Handling
 
-- **File Permissions**: Created with `0600` (owner read/write only)
-- **Atomic Writes**: Uses temporary file + rename pattern to prevent corruption
-- **Concurrent Access**: File locking prevents race conditions when multiple processes access the same token file
+- All errors are checked — no silent failures
+- Error chains preserve full context for debugging
+- Token values are truncated or redacted in log output
 
-#### Secure Error Handling
+### Best Practices
 
-- **No Ignored Errors**: All error conditions are checked and handled
-- **Wrapped Errors**: Error chains preserve context for debugging
-- **Safe Logging**: Token values are truncated or redacted in logs
+1. Add `.authgate-tokens.json` to `.gitignore`
+2. Use HTTPS URLs in production — the CLI will warn if you don't
+3. Delete token files when no longer needed
+4. Review any security warnings printed at startup
+
+---
 
 ## Troubleshooting
 
-### "CLIENT_ID not set" Error
+**`CLIENT_ID not set`**
+Provide via `-client-id=<id>` flag, `CLIENT_ID` env var, or `.env` file. Find your ID in the AuthGate server startup logs.
 
-Make sure you've provided the client ID via one of these methods:
-
-- Command-line flag: `-client-id=<your-id>`
-- Environment variable: `CLIENT_ID=<your-id>`
-- `.env` file: `CLIENT_ID=<your-id>`
-
-You can find your client ID in the AuthGate server startup logs.
-
-### "Connection refused" Error
-
-Make sure the AuthGate server is running:
+**`connection refused`**
+Start the AuthGate server in another terminal:
 
 ```bash
-# In another terminal
-cd authgate
 ./bin/authgate server
 ```
 
-Check that the server URL matches (default: `http://localhost:8080`).
+Verify the server URL matches (default: `http://localhost:8080`).
 
-### "Token verification failed" Error
-
-Your token may have been revoked or expired. Delete the token file and re-authenticate:
+**`token verification failed`**
+The token was revoked or is invalid. Delete the token file and re-authenticate:
 
 ```bash
 rm .authgate-tokens.json
 ./authgate-device-cli -client-id=<your-id>
 ```
 
-### "Refresh failed" Error
+**`refresh failed`**
+The CLI will automatically start a new device flow. Follow the browser authorization steps again.
 
-If token refresh fails, the tool will automatically start a new device flow. Follow the authorization steps again.
+**Polling is slowing down**
+Normal behavior — the server returned a `slow_down` signal. The CLI has automatically increased its polling interval. See [Error Reference](#error-reference).
 
-### "slow_down" Error During Polling
+**`context deadline exceeded`**
+A request timed out (30s limit). Check your network connection and server availability.
 
-If you see slower progress dots during authorization, the CLI has detected a `slow_down` signal from the server and automatically adjusted its polling interval. This is normal behavior to prevent server overload.
+---
 
-### "context deadline exceeded" Error
+## Development
 
-This indicates the operation timed out (default: 30 seconds for requests). Check your network connection and server availability.
+```bash
+# Run tests
+go test ./...
 
-## Security Best Practices
+# Build binary
+go build -o authgate-device-cli
 
-1. **Protect Your Token File**: Never commit `.authgate-tokens.json` to version control. Add it to `.gitignore`
-2. **Use HTTPS in Production**: The CLI will warn you if using HTTP. Always use HTTPS server URLs in production
-3. **Secure Client ID**: While not a secret, treat your client ID as sensitive configuration
-4. **Regular Cleanup**: Delete token files when no longer needed
-5. **File Permissions**: The CLI automatically sets token file permissions to `0600` (owner-only access)
-6. **Review Warnings**: Pay attention to security warnings about HTTP usage and invalid UUIDs
+# Build with version info
+go build -ldflags="-X main.version=1.0.0" -o authgate-device-cli
+```
+
+---
 
 ## Learn More
 
-For more information about the OAuth 2.0 Device Authorization Grant flow:
-
-- [RFC 8628 - OAuth 2.0 Device Authorization Grant](https://datatracker.ietf.org/doc/html/rfc8628)
+- [RFC 8628 — OAuth 2.0 Device Authorization Grant](https://datatracker.ietf.org/doc/html/rfc8628)
 - [AuthGate Documentation](../../README.md)
 
-## Support
-
-If you encounter any issues or have questions, please open an issue on the project repository.
+For issues or questions, please open an issue on the project repository.
