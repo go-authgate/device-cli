@@ -1,5 +1,8 @@
 # AuthGate CLI - OAuth 2.0 Device Flow Client
 
+[![Trivy Security Scan](https://github.com/go-authgate/device-cli/actions/workflows/security.yml/badge.svg)](https://github.com/go-authgate/device-cli/actions/workflows/security.yml)
+[![Lint and Testing](https://github.com/go-authgate/device-cli/actions/workflows/testing.yml/badge.svg)](https://github.com/go-authgate/device-cli/actions/workflows/testing.yml)
+
 AuthGate CLI is a command-line tool that demonstrates how to authenticate with AuthGate server using the OAuth 2.0 Device Authorization Flow.
 
 ## What does it do?
