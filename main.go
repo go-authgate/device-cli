@@ -328,7 +328,7 @@ func requestDeviceCode(ctx context.Context) (*oauth2.DeviceAuthResponse, error) 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	// Execute request with retry logic
-	resp, err := retryClient.Do(reqCtx, req)
+	resp, err := retryClient.DoWithContext(reqCtx, req)
 	if err != nil {
 		return nil, fmt.Errorf("device code request failed: %w", err)
 	}
@@ -555,7 +555,7 @@ func exchangeDeviceCode(
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := retryClient.Do(reqCtx, req)
+	resp, err := retryClient.DoWithContext(reqCtx, req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -618,7 +618,7 @@ func verifyToken(accessToken string) error {
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 
 	// Execute request with retry logic
-	resp, err := retryClient.Do(ctx, req)
+	resp, err := retryClient.DoWithContext(ctx, req)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
@@ -749,7 +749,7 @@ func refreshAccessToken(refreshToken string) (*TokenStorage, error) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	// Execute request with retry logic
-	resp, err := retryClient.Do(ctx, req)
+	resp, err := retryClient.DoWithContext(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("refresh request failed: %w", err)
 	}
@@ -827,7 +827,7 @@ func makeAPICallWithAutoRefresh(storage *TokenStorage) error {
 	}
 	req.Header.Set("Authorization", "Bearer "+storage.AccessToken)
 
-	resp, err := retryClient.Do(context.Background(), req)
+	resp, err := retryClient.DoWithContext(context.Background(), req)
 	if err != nil {
 		return fmt.Errorf("API request failed: %w", err)
 	}
@@ -861,7 +861,7 @@ func makeAPICallWithAutoRefresh(storage *TokenStorage) error {
 		}
 		req.Header.Set("Authorization", "Bearer "+storage.AccessToken)
 
-		resp, err = retryClient.Do(context.Background(), req)
+		resp, err = retryClient.DoWithContext(context.Background(), req)
 		if err != nil {
 			return fmt.Errorf("retry failed: %w", err)
 		}
