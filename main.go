@@ -225,6 +225,12 @@ func main() {
 
 	fmt.Printf("=== OAuth Device Code Flow CLI Demo (with Refresh Token) ===\n\n")
 
+	if err := run(); err != nil {
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -261,7 +267,7 @@ func main() {
 		storage, err = performDeviceFlow(ctx)
 		if err != nil {
 			fmt.Printf("Device flow failed: %v\n", err)
-			os.Exit(1)
+			return err
 		}
 	}
 
@@ -294,20 +300,22 @@ func main() {
 			storage, err = performDeviceFlow(ctx)
 			if err != nil {
 				fmt.Printf("Re-authentication failed: %v\n", err)
-				os.Exit(1)
+				return err
 			}
 
 			// Retry API call with new tokens
 			fmt.Println("Retrying API call with new tokens...")
 			if err := makeAPICallWithAutoRefresh(ctx, storage); err != nil {
 				fmt.Printf("API call failed after re-authentication: %v\n", err)
-				os.Exit(1)
+				return err
 			}
 			fmt.Println("API call successful after re-authentication!")
 		} else {
 			fmt.Printf("API call failed: %v\n", err)
 		}
 	}
+
+	return nil
 }
 
 // requestDeviceCode requests a device code from the OAuth server with retry logic
@@ -682,7 +690,11 @@ func saveTokens(storage *TokenStorage) error {
 	if err != nil {
 		return fmt.Errorf("failed to acquire lock: %w", err)
 	}
-	defer lock.release()
+	defer func() {
+		if releaseErr := lock.release(); releaseErr != nil {
+			fmt.Fprintf(os.Stderr, "failed to release lock: %v\n", releaseErr)
+		}
+	}()
 
 	// Load existing token map (inside lock to ensure consistency)
 	var storageMap TokenStorageMap

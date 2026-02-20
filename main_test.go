@@ -25,7 +25,7 @@ func init() {
 		clientID = "test-client"
 	}
 	if tokenFile == "" {
-		tokenFile = ".authgate-tokens.json"
+		tokenFile = ".authgate-tokens.json" //nolint:gosec
 	}
 	// Initialize retryClient for tests
 	if retryClient == nil {
@@ -288,10 +288,8 @@ func TestValidateTokenResponse(t *testing.T) {
 						tt.errContains,
 					)
 				}
-			} else {
-				if err != nil {
-					t.Errorf("validateTokenResponse() unexpected error = %v", err)
-				}
+			} else if err != nil {
+				t.Errorf("validateTokenResponse() unexpected error = %v", err)
 			}
 		})
 	}
@@ -387,7 +385,7 @@ func TestRefreshAccessToken_RotationMode(t *testing.T) {
 					}
 
 					w.Header().Set("Content-Type", "application/json")
-					json.NewEncoder(w).Encode(response)
+					_ = json.NewEncoder(w).Encode(response)
 				}),
 			)
 			defer server.Close()
@@ -518,7 +516,7 @@ func TestRefreshAccessToken_ValidationErrors(t *testing.T) {
 			server := httptest.NewServer(
 				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					w.Header().Set("Content-Type", "application/json")
-					json.NewEncoder(w).Encode(tt.responseBody)
+					_ = json.NewEncoder(w).Encode(tt.responseBody)
 				}),
 			)
 			defer server.Close()
@@ -541,10 +539,8 @@ func TestRefreshAccessToken_ValidationErrors(t *testing.T) {
 						tt.errContains,
 					)
 				}
-			} else {
-				if err != nil {
-					t.Errorf("refreshAccessToken() unexpected error = %v", err)
-				}
+			} else if err != nil {
+				t.Errorf("refreshAccessToken() unexpected error = %v", err)
 			}
 		})
 	}
@@ -575,7 +571,7 @@ func TestRequestDeviceCode_WithRetry(t *testing.T) {
 		// Succeed on second attempt
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"device_code":               "test-device-code",
 			"user_code":                 "TEST-CODE",
 			"verification_uri":          testServer.URL + "/device",
