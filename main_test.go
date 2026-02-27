@@ -25,7 +25,7 @@ func init() {
 		clientID = "test-client"
 	}
 	if tokenFile == "" {
-		tokenFile = ".authgate-tokens.json" //nolint:gosec
+		tokenFile = ".authgate-tokens.json" //nolint:gosec // token file path is not a credential
 	}
 	// Initialize retryClient for tests
 	if retryClient == nil {
@@ -45,7 +45,7 @@ func TestSaveTokens_ConcurrentWrites(t *testing.T) {
 	var wg sync.WaitGroup
 
 	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		go func(id int) {
 			defer wg.Done()
 
@@ -82,7 +82,7 @@ func TestSaveTokens_ConcurrentWrites(t *testing.T) {
 	}
 
 	// Verify each token
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		clientID := fmt.Sprintf("client-%d", i)
 		token, ok := storageMap.Tokens[clientID]
 		if !ok {
@@ -373,7 +373,7 @@ func TestRefreshAccessToken_RotationMode(t *testing.T) {
 					}
 
 					// Build response
-					response := map[string]interface{}{
+					response := map[string]any{
 						"access_token": "new-access-token",
 						"token_type":   "Bearer",
 						"expires_in":   3600,
@@ -464,13 +464,13 @@ func TestRefreshAccessToken_ValidationErrors(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		responseBody map[string]interface{}
+		responseBody map[string]any
 		wantErr      bool
 		errContains  string
 	}{
 		{
 			name: "invalid - empty access token",
-			responseBody: map[string]interface{}{
+			responseBody: map[string]any{
 				"access_token": "",
 				"token_type":   "Bearer",
 				"expires_in":   3600,
@@ -480,7 +480,7 @@ func TestRefreshAccessToken_ValidationErrors(t *testing.T) {
 		},
 		{
 			name: "invalid - access token too short",
-			responseBody: map[string]interface{}{
+			responseBody: map[string]any{
 				"access_token": "short",
 				"token_type":   "Bearer",
 				"expires_in":   3600,
@@ -490,7 +490,7 @@ func TestRefreshAccessToken_ValidationErrors(t *testing.T) {
 		},
 		{
 			name: "invalid - zero expires_in",
-			responseBody: map[string]interface{}{
+			responseBody: map[string]any{
 				"access_token": "valid-token-123456",
 				"token_type":   "Bearer",
 				"expires_in":   0,
@@ -500,7 +500,7 @@ func TestRefreshAccessToken_ValidationErrors(t *testing.T) {
 		},
 		{
 			name: "invalid - wrong token type",
-			responseBody: map[string]interface{}{
+			responseBody: map[string]any{
 				"access_token": "valid-token-123456",
 				"token_type":   "Basic",
 				"expires_in":   3600,
@@ -571,7 +571,7 @@ func TestRequestDeviceCode_WithRetry(t *testing.T) {
 		// Succeed on second attempt
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"device_code":               "test-device-code",
 			"user_code":                 "TEST-CODE",
 			"verification_uri":          testServer.URL + "/device",
