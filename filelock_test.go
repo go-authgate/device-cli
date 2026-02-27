@@ -40,7 +40,7 @@ func TestConcurrentLocks(t *testing.T) {
 	var mu sync.Mutex
 	concurrent := 0
 
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()

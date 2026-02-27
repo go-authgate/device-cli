@@ -157,7 +157,7 @@ func getEnv(key, defaultValue string) string {
 // validateServerURL validates that the server URL is properly formatted
 func validateServerURL(rawURL string) error {
 	if rawURL == "" {
-		return fmt.Errorf("server URL cannot be empty")
+		return errors.New("server URL cannot be empty")
 	}
 
 	u, err := url.Parse(rawURL)
@@ -170,7 +170,7 @@ func validateServerURL(rawURL string) error {
 	}
 
 	if u.Host == "" {
-		return fmt.Errorf("URL must include a host")
+		return errors.New("URL must include a host")
 	}
 
 	return nil
@@ -182,12 +182,12 @@ type ErrorResponse struct {
 }
 
 // ErrRefreshTokenExpired indicates that the refresh token has expired or is invalid
-var ErrRefreshTokenExpired = fmt.Errorf("refresh token expired or invalid")
+var ErrRefreshTokenExpired = errors.New("refresh token expired or invalid")
 
 // validateTokenResponse validates the OAuth token response
 func validateTokenResponse(accessToken, tokenType string, expiresIn int) error {
 	if accessToken == "" {
-		return fmt.Errorf("access_token is empty")
+		return errors.New("access_token is empty")
 	}
 
 	if len(accessToken) < 10 {
@@ -330,7 +330,7 @@ func requestDeviceCode(ctx context.Context) (*oauth2.DeviceAuthResponse, error) 
 
 	req, err := http.NewRequestWithContext(
 		reqCtx,
-		"POST",
+		http.MethodPost,
 		serverURL+"/oauth/device/code",
 		strings.NewReader(data.Encode()),
 	)
@@ -491,21 +491,20 @@ func pollForTokenWithProgress(
 						case "slow_down":
 							// Server requests slower polling - increase interval
 							backoffMultiplier *= 1.5
-							newInterval := time.Duration(float64(pollInterval) * backoffMultiplier)
-							if newInterval > 60*time.Second {
-								newInterval = 60 * time.Second // Cap at 60 seconds
-							}
-							pollInterval = newInterval
+							pollInterval = min(
+								time.Duration(float64(pollInterval)*backoffMultiplier),
+								60*time.Second,
+							)
 							pollTicker.Reset(pollInterval)
 							continue
 
 						case "expired_token":
 							fmt.Println()
-							return nil, fmt.Errorf("device code expired, please restart the flow")
+							return nil, errors.New("device code expired, please restart the flow")
 
 						case "access_denied":
 							fmt.Println()
-							return nil, fmt.Errorf("user denied authorization")
+							return nil, errors.New("user denied authorization")
 
 						default:
 							fmt.Println()
@@ -558,7 +557,7 @@ func exchangeDeviceCode(
 
 	req, err := http.NewRequestWithContext(
 		reqCtx,
-		"POST",
+		http.MethodPost,
 		tokenURL,
 		strings.NewReader(data.Encode()),
 	)
@@ -623,7 +622,9 @@ func verifyToken(ctx context.Context, accessToken string) error {
 	reqCtx, cancel := context.WithTimeout(ctx, tokenVerificationTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, "GET", serverURL+"/oauth/tokeninfo", nil)
+	req, err := http.NewRequestWithContext(
+		reqCtx, http.MethodGet, serverURL+"/oauth/tokeninfo", nil,
+	)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -666,7 +667,7 @@ func loadTokens() (*TokenStorage, error) {
 	}
 
 	if storageMap.Tokens == nil {
-		return nil, fmt.Errorf("no tokens found in token file")
+		return nil, errors.New("no tokens found in token file")
 	}
 
 	// Look up token for current client_id
@@ -755,7 +756,7 @@ func refreshAccessToken(ctx context.Context, refreshToken string) (*TokenStorage
 
 	req, err := http.NewRequestWithContext(
 		reqCtx,
-		"POST",
+		http.MethodPost,
 		serverURL+"/oauth/token",
 		strings.NewReader(data.Encode()),
 	)
@@ -840,7 +841,9 @@ func makeAPICallWithAutoRefresh(ctx context.Context, storage *TokenStorage) erro
 	reqCtx, cancel := context.WithTimeout(ctx, tokenVerificationTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, "GET", serverURL+"/oauth/tokeninfo", nil)
+	req, err := http.NewRequestWithContext(
+		reqCtx, http.MethodGet, serverURL+"/oauth/tokeninfo", nil,
+	)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -877,7 +880,9 @@ func makeAPICallWithAutoRefresh(ctx context.Context, storage *TokenStorage) erro
 		retryCtx, retryCancel := context.WithTimeout(ctx, tokenVerificationTimeout)
 		defer retryCancel()
 
-		req, err = http.NewRequestWithContext(retryCtx, "GET", serverURL+"/oauth/tokeninfo", nil)
+		req, err = http.NewRequestWithContext(
+			retryCtx, http.MethodGet, serverURL+"/oauth/tokeninfo", nil,
+		)
 		if err != nil {
 			return fmt.Errorf("failed to create retry request: %w", err)
 		}

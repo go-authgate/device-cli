@@ -33,7 +33,7 @@ func TestPollForToken_AuthorizationPending(t *testing.T) {
 
 		// Success on 3rd attempt
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"access_token":  testAccessToken,
 			"refresh_token": "test-refresh-token",
 			"token_type":    "Bearer",
@@ -103,7 +103,7 @@ func TestPollForToken_SlowDown(t *testing.T) {
 
 		// Success
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"access_token":  testAccessToken,
 			"refresh_token": "test-refresh-token",
 			"token_type":    "Bearer",
@@ -252,7 +252,7 @@ func TestPollForToken_ContextTimeout(t *testing.T) {
 
 func TestExchangeDeviceCode_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" {
+		if r.Method != http.MethodPost {
 			t.Errorf("Expected POST request, got %s", r.Method)
 		}
 
@@ -272,7 +272,7 @@ func TestExchangeDeviceCode_Success(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"access_token":  testAccessToken,
 			"refresh_token": "test-refresh-token",
 			"token_type":    "Bearer",
