@@ -14,6 +14,7 @@ import (
 	"time"
 
 	retry "github.com/appleboy/go-httpretry"
+	"github.com/go-authgate/device-cli/tui"
 )
 
 func init() {
@@ -394,7 +395,11 @@ func TestRefreshAccessToken_RotationMode(t *testing.T) {
 			serverURL = server.URL
 
 			// Call refreshAccessToken
-			storage, err := refreshAccessToken(context.Background(), tt.oldRefreshToken)
+			storage, err := refreshAccessToken(
+				context.Background(),
+				tt.oldRefreshToken,
+				tui.NoopDisplayer{},
+			)
 			if err != nil {
 				t.Fatalf("refreshAccessToken() error = %v", err)
 			}
@@ -525,7 +530,11 @@ func TestRefreshAccessToken_ValidationErrors(t *testing.T) {
 			serverURL = server.URL
 
 			// Call refreshAccessToken
-			_, err := refreshAccessToken(context.Background(), "test-refresh-token")
+			_, err := refreshAccessToken(
+				context.Background(),
+				"test-refresh-token",
+				tui.NoopDisplayer{},
+			)
 
 			if tt.wantErr {
 				if err == nil {

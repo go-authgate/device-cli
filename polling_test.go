@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-authgate/device-cli/tui"
 	"golang.org/x/oauth2"
 )
 
@@ -57,7 +58,7 @@ func TestPollForToken_AuthorizationPending(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	token, err := pollForTokenWithProgress(ctx, config, deviceAuth)
+	token, err := pollForTokenWithProgress(ctx, config, deviceAuth, tui.NoopDisplayer{})
 	if err != nil {
 		t.Fatalf("Expected success, got error: %v", err)
 	}
@@ -127,7 +128,7 @@ func TestPollForToken_SlowDown(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	token, err := pollForTokenWithProgress(ctx, config, deviceAuth)
+	token, err := pollForTokenWithProgress(ctx, config, deviceAuth, tui.NoopDisplayer{})
 	if err != nil {
 		t.Fatalf("Expected success, got error: %v", err)
 	}
@@ -199,7 +200,7 @@ func TestPollForToken_ErrorCases(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
-			_, err := pollForTokenWithProgress(ctx, config, deviceAuth)
+			_, err := pollForTokenWithProgress(ctx, config, deviceAuth, tui.NoopDisplayer{})
 			if err == nil {
 				t.Fatalf("Expected error for %s, got nil", tt.name)
 			}
@@ -239,7 +240,7 @@ func TestPollForToken_ContextTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	_, err := pollForTokenWithProgress(ctx, config, deviceAuth)
+	_, err := pollForTokenWithProgress(ctx, config, deviceAuth, tui.NoopDisplayer{})
 	if err == nil {
 		t.Fatal("Expected context timeout error, got nil")
 	}
