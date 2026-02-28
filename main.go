@@ -245,13 +245,11 @@ func main() {
 		p := tea.NewProgram(m, tea.WithOutput(os.Stderr), tea.WithInput(nil))
 
 		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if _, err := p.Run(); err != nil {
 				fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
 			}
-		}()
+		})
 
 		d := tui.NewProgramDisplayer(p)
 		d.Banner()
