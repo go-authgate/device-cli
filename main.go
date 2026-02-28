@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -20,6 +21,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	"golang.org/x/oauth2"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/go-authgate/device-cli/tui"
 )
 
 var (
@@ -220,17 +224,51 @@ type TokenStorageMap struct {
 	Tokens map[string]*TokenStorage `json:"tokens"` // key = client_id
 }
 
+// isTTY reports whether stderr is a character device (interactive terminal).
+// We check stderr because the TUI renders to stderr, allowing stdout to be piped.
+func isTTY() bool {
+	fi, err := os.Stderr.Stat()
+	if err != nil {
+		return false
+	}
+	return (fi.Mode() & os.ModeCharDevice) != 0
+}
+
 func main() {
-	initConfig() // Parse flags and initialize configuration
+	initConfig()
 
-	fmt.Printf("=== OAuth Device Code Flow CLI Demo (with Refresh Token) ===\n\n")
+	if isTTY() {
+		// Run TUI program on stderr so stdout pipes are not corrupted
+		m := tui.NewModel()
+		// WithInput(nil): disable stdin/keyboard input so BubbleTea skips terminal
+		// capability queries (?2026/?2027). Ctrl+C is handled by signal.NotifyContext.
+		p := tea.NewProgram(m, tea.WithOutput(os.Stderr), tea.WithInput(nil))
 
-	if err := run(); err != nil {
-		os.Exit(1)
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			if _, err := p.Run(); err != nil {
+				fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
+			}
+		})
+
+		d := tui.NewProgramDisplayer(p)
+		d.Banner()
+		runErr := run(d)
+		p.Quit() // let BubbleTea drain terminal query responses before exiting
+		wg.Wait()
+		if runErr != nil {
+			os.Exit(1)
+		}
+	} else {
+		d := tui.NewPlainDisplayer(os.Stderr)
+		d.Banner()
+		if err := run(d); err != nil {
+			os.Exit(1)
+		}
 	}
 }
 
-func run() error {
+func run(d tui.Displayer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -239,79 +277,71 @@ func run() error {
 	// Try to load existing tokens
 	storage, err := loadTokens()
 	if err == nil && storage != nil {
-		fmt.Println("Found existing tokens!")
+		d.TokensFound()
 
 		// Check if access token is still valid
 		if time.Now().Before(storage.ExpiresAt) {
-			fmt.Println("Access token is still valid, using it...")
+			d.TokenValid()
 		} else {
-			fmt.Println("Access token expired, refreshing...")
+			d.TokenExpired()
+			d.Refreshing()
 
 			// Try to refresh
-			newStorage, err := refreshAccessToken(ctx, storage.RefreshToken)
+			newStorage, err := refreshAccessToken(ctx, storage.RefreshToken, d)
 			if err != nil {
-				fmt.Printf("Refresh failed: %v\n", err)
-				fmt.Println("Starting new device flow...")
+				d.RefreshFailed(err)
 				storage = nil // Force device flow
 			} else {
 				storage = newStorage
-				fmt.Println("Token refreshed successfully!")
+				d.RefreshOK()
 			}
 		}
 	} else {
-		fmt.Println("No existing tokens found, starting device flow...")
+		d.TokensNotFound()
 	}
 
 	// If no valid tokens, do device flow
 	if storage == nil {
-		storage, err = performDeviceFlow(ctx)
+		storage, err = performDeviceFlow(ctx, d)
 		if err != nil {
-			fmt.Printf("Device flow failed: %v\n", err)
+			d.Fatal(err)
 			return err
 		}
 	}
 
 	// Display current token info
-	fmt.Printf("\n========================================\n")
-	fmt.Printf("Current Token Info:\n")
 	tokenPreview := storage.AccessToken
 	if len(tokenPreview) > 50 {
 		tokenPreview = tokenPreview[:50]
 	}
-	fmt.Printf("Access Token: %s...\n", tokenPreview)
-	fmt.Printf("Token Type: %s\n", storage.TokenType)
-	fmt.Printf("Expires In: %s\n", time.Until(storage.ExpiresAt).Round(time.Second))
-	fmt.Printf("========================================\n")
+	d.Done(tokenPreview, storage.TokenType, time.Until(storage.ExpiresAt).Round(time.Second))
 
 	// Verify token
-	fmt.Println("\nVerifying token...")
-	if err := verifyToken(ctx, storage.AccessToken); err != nil {
-		fmt.Printf("Token verification failed: %v\n", err)
-	} else {
-		fmt.Println("Token verified successfully!")
+	d.Verifying()
+	if err := verifyToken(ctx, storage.AccessToken, d); err != nil {
+		d.VerifyFailed(err)
 	}
 
 	// Demonstrate automatic refresh on 401
-	fmt.Println("\nDemonstrating automatic refresh on API call...")
-	if err := makeAPICallWithAutoRefresh(ctx, storage); err != nil {
+	if err := makeAPICallWithAutoRefresh(ctx, storage, d); err != nil {
 		// Check if error is due to expired refresh token
 		if err == ErrRefreshTokenExpired {
-			fmt.Println("Refresh token expired, re-authenticating...")
-			storage, err = performDeviceFlow(ctx)
+			d.ReAuthRequired()
+			storage, err = performDeviceFlow(ctx, d)
 			if err != nil {
-				fmt.Printf("Re-authentication failed: %v\n", err)
+				d.Fatal(err)
 				return err
 			}
 
 			// Retry API call with new tokens
-			fmt.Println("Retrying API call with new tokens...")
-			if err := makeAPICallWithAutoRefresh(ctx, storage); err != nil {
-				fmt.Printf("API call failed after re-authentication: %v\n", err)
+			d.TokenRefreshedRetrying()
+			if err := makeAPICallWithAutoRefresh(ctx, storage, d); err != nil {
+				d.Fatal(err)
 				return err
 			}
-			fmt.Println("API call successful after re-authentication!")
+			d.APICallOK()
 		} else {
-			fmt.Printf("API call failed: %v\n", err)
+			d.APICallFailed(err)
 		}
 	}
 
@@ -384,7 +414,7 @@ func requestDeviceCode(ctx context.Context) (*oauth2.DeviceAuthResponse, error) 
 }
 
 // performDeviceFlow performs the OAuth device authorization flow
-func performDeviceFlow(ctx context.Context) (*TokenStorage, error) {
+func performDeviceFlow(ctx context.Context, d tui.Displayer) (*TokenStorage, error) {
 	config := &oauth2.Config{
 		ClientID: clientID,
 		Endpoint: oauth2.Endpoint{
@@ -395,26 +425,26 @@ func performDeviceFlow(ctx context.Context) (*TokenStorage, error) {
 	}
 
 	// Step 1: Request device code (with retry logic)
-	fmt.Println("Step 1: Requesting device code...")
 	deviceAuth, err := requestDeviceCode(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("device code request failed: %w", err)
 	}
 
-	fmt.Printf("\n----------------------------------------\n")
-	fmt.Printf("Please open this link to authorize:\n%s\n", deviceAuth.VerificationURIComplete)
-	fmt.Printf("\nOr manually visit: %s\n", deviceAuth.VerificationURI)
-	fmt.Printf("And enter code: %s\n", deviceAuth.UserCode)
-	fmt.Printf("----------------------------------------\n\n")
+	d.DeviceCodeReady(
+		deviceAuth.UserCode,
+		deviceAuth.VerificationURI,
+		deviceAuth.VerificationURIComplete,
+		deviceAuth.Expiry,
+	)
 
 	// Step 2: Poll for token
-	fmt.Println("Step 2: Waiting for authorization...")
-	token, err := pollForTokenWithProgress(ctx, config, deviceAuth)
+	d.WaitingForAuth()
+	token, err := pollForTokenWithProgress(ctx, config, deviceAuth, d)
 	if err != nil {
 		return nil, fmt.Errorf("token poll failed: %w", err)
 	}
 
-	fmt.Println("\nAuthorization successful!")
+	d.AuthSuccess()
 
 	// Convert to TokenStorage and save
 	storage := &TokenStorage{
@@ -426,20 +456,21 @@ func performDeviceFlow(ctx context.Context) (*TokenStorage, error) {
 	}
 
 	if err := saveTokens(storage); err != nil {
-		fmt.Printf("Warning: Failed to save tokens: %v\n", err)
+		d.TokenSaveFailed(err)
 	} else {
-		fmt.Printf("Tokens saved to %s\n", tokenFile)
+		d.TokenSaved(tokenFile)
 	}
 
 	return storage, nil
 }
 
-// pollForTokenWithProgress polls for token while showing progress dots
-// Implements exponential backoff for slow_down errors per RFC 8628
+// pollForTokenWithProgress polls for token while reporting progress via Displayer.
+// Implements exponential backoff for slow_down errors per RFC 8628.
 func pollForTokenWithProgress(
 	ctx context.Context,
 	config *oauth2.Config,
 	deviceAuth *oauth2.DeviceAuthResponse,
+	d tui.Displayer,
 ) (*oauth2.Token, error) {
 	// Initial polling interval (from DeviceAuthResponse)
 	interval := deviceAuth.Interval
@@ -447,26 +478,16 @@ func pollForTokenWithProgress(
 		interval = 5 // Default to 5 seconds per RFC 8628
 	}
 
-	// UI update interval (less frequent than polling to reduce flicker)
-	uiUpdateInterval := 2 * time.Second
-
 	// Exponential backoff state
 	pollInterval := time.Duration(interval) * time.Second
 	backoffMultiplier := 1.0
 
-	ticker := time.NewTicker(uiUpdateInterval)
-	defer ticker.Stop()
-
 	pollTicker := time.NewTicker(pollInterval)
 	defer pollTicker.Stop()
-
-	dotCount := 0
-	lastUpdate := time.Now()
 
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Println()
 			return nil, ctx.Err()
 
 		case <-pollTicker.C:
@@ -496,18 +517,16 @@ func pollForTokenWithProgress(
 								60*time.Second,
 							)
 							pollTicker.Reset(pollInterval)
+							d.PollSlowDown(pollInterval)
 							continue
 
 						case "expired_token":
-							fmt.Println()
 							return nil, errors.New("device code expired, please restart the flow")
 
 						case "access_denied":
-							fmt.Println()
 							return nil, errors.New("user denied authorization")
 
 						default:
-							fmt.Println()
 							return nil, fmt.Errorf(
 								"authorization failed: %s - %s",
 								errResp.Error,
@@ -517,26 +536,11 @@ func pollForTokenWithProgress(
 					}
 				}
 				// Unknown error
-				fmt.Println()
 				return nil, fmt.Errorf("token exchange failed: %w", err)
 			}
 
 			// Success!
-			fmt.Println()
 			return token, nil
-
-		case <-ticker.C:
-			// Update UI (show progress dots)
-			if time.Since(lastUpdate) >= uiUpdateInterval {
-				fmt.Print(".")
-				dotCount++
-				lastUpdate = time.Now()
-
-				// Add newline every 50 dots for readability
-				if dotCount%50 == 0 {
-					fmt.Println()
-				}
-			}
 		}
 	}
 }
@@ -617,7 +621,7 @@ func exchangeDeviceCode(
 	return token, nil
 }
 
-func verifyToken(ctx context.Context, accessToken string) error {
+func verifyToken(ctx context.Context, accessToken string, d tui.Displayer) error {
 	// Create request with timeout
 	reqCtx, cancel := context.WithTimeout(ctx, tokenVerificationTimeout)
 	defer cancel()
@@ -650,7 +654,7 @@ func verifyToken(ctx context.Context, accessToken string) error {
 		return fmt.Errorf("%s: %s", errResp.Error, errResp.ErrorDescription)
 	}
 
-	fmt.Printf("Token Info: %s\n", string(body))
+	d.VerifyOK(string(body))
 	return nil
 }
 
@@ -744,7 +748,11 @@ func saveTokens(storage *TokenStorage) error {
 }
 
 // refreshAccessToken refreshes the access token using refresh token
-func refreshAccessToken(ctx context.Context, refreshToken string) (*TokenStorage, error) {
+func refreshAccessToken(
+	ctx context.Context,
+	refreshToken string,
+	d tui.Displayer,
+) (*TokenStorage, error) {
 	// Create request with timeout
 	reqCtx, cancel := context.WithTimeout(ctx, refreshTokenTimeout)
 	defer cancel()
@@ -829,14 +837,14 @@ func refreshAccessToken(ctx context.Context, refreshToken string) (*TokenStorage
 
 	// Save updated tokens
 	if err := saveTokens(storage); err != nil {
-		fmt.Printf("Warning: Failed to save refreshed tokens: %v\n", err)
+		d.TokenSaveFailed(err)
 	}
 
 	return storage, nil
 }
 
 // makeAPICallWithAutoRefresh demonstrates automatic refresh on 401
-func makeAPICallWithAutoRefresh(ctx context.Context, storage *TokenStorage) error {
+func makeAPICallWithAutoRefresh(ctx context.Context, storage *TokenStorage, d tui.Displayer) error {
 	// Try with current access token
 	reqCtx, cancel := context.WithTimeout(ctx, tokenVerificationTimeout)
 	defer cancel()
@@ -857,9 +865,9 @@ func makeAPICallWithAutoRefresh(ctx context.Context, storage *TokenStorage) erro
 
 	// If 401, try to refresh and retry
 	if resp.StatusCode == http.StatusUnauthorized {
-		fmt.Println("Access token rejected (401), refreshing...")
+		d.AccessTokenRejected()
 
-		newStorage, err := refreshAccessToken(ctx, storage.RefreshToken)
+		newStorage, err := refreshAccessToken(ctx, storage.RefreshToken, d)
 		if err != nil {
 			// If refresh token is expired, propagate the error to trigger device flow
 			if err == ErrRefreshTokenExpired {
@@ -874,7 +882,7 @@ func makeAPICallWithAutoRefresh(ctx context.Context, storage *TokenStorage) erro
 		storage.RefreshToken = newStorage.RefreshToken
 		storage.ExpiresAt = newStorage.ExpiresAt
 
-		fmt.Println("Token refreshed, retrying API call...")
+		d.TokenRefreshedRetrying()
 
 		// Retry with new token
 		retryCtx, retryCancel := context.WithTimeout(ctx, tokenVerificationTimeout)
@@ -904,6 +912,6 @@ func makeAPICallWithAutoRefresh(ctx context.Context, storage *TokenStorage) erro
 		return fmt.Errorf("API call failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
-	fmt.Println("API call successful!")
+	d.APICallOK()
 	return nil
 }
