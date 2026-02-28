@@ -224,9 +224,10 @@ type TokenStorageMap struct {
 	Tokens map[string]*TokenStorage `json:"tokens"` // key = client_id
 }
 
-// isTTY reports whether stdout is a character device (interactive terminal).
+// isTTY reports whether stderr is a character device (interactive terminal).
+// We check stderr because the TUI renders to stderr, allowing stdout to be piped.
 func isTTY() bool {
-	fi, err := os.Stdout.Stat()
+	fi, err := os.Stderr.Stat()
 	if err != nil {
 		return false
 	}
@@ -244,11 +245,13 @@ func main() {
 		p := tea.NewProgram(m, tea.WithOutput(os.Stderr), tea.WithInput(nil))
 
 		var wg sync.WaitGroup
-		wg.Go(func() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 			if _, err := p.Run(); err != nil {
 				fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
 			}
-		})
+		}()
 
 		d := tui.NewProgramDisplayer(p)
 		d.Banner()

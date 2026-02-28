@@ -205,6 +205,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case MsgVerifyOK:
+		if msg.Body != "" {
+			body := msg.Body
+			if len(body) > 80 {
+				body = body[:80] + "…"
+			}
+			m.addStatus(statusInfo, "Token info: "+body)
+		}
 		m.addStatus(statusOK, "Token verified successfully")
 		return m, nil
 
